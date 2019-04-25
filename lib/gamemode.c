@@ -18,12 +18,12 @@
 #define DEBUG(...)
 #define LOG_ERROR
 #else
-#define DEBUG(...) fprintf (stderr, "GAMEMODE: " # __VA_ARGS__)
-#define LOG_ERROR DEBUG ("ERROR:" # error_string)
+#define DEBUG(...) fprintf (stderr, __VA_ARGS__)
+#define LOG_ERROR fprintf (stderr, "ERROR: %s \n", error_string)
 #endif
 
 #ifdef DO_TRACE
-#define TRACE(...) fprintf (stderr, "GAMEMODE-TRACE: " #  __VA_ARGS__)
+#define TRACE(...) fprintf (stderr, __VA_ARGS__)
 #else
 #define TRACE(...)
 #endif
@@ -44,7 +44,6 @@ hop_off_the_bus (DBusConnection **bus)
     return;
 
   dbus_connection_unref (*bus);
-  TRACE ("Im off the bus!");
 }
 
 static DBusConnection *
@@ -87,8 +86,6 @@ cleanup_pending_call (DBusPendingCall **call)
   dbus_pending_call_unref (*call);
 }
 
-
-
 static int
 gamemode_request (const char *method, pid_t for_pid)
 {
@@ -102,6 +99,9 @@ gamemode_request (const char *method, pid_t for_pid)
 
   bus = hop_on_the_bus ();
   pid = (dbus_int32_t) getpid ();
+
+  TRACE ("[%d] request '%s' received (%d)\n",
+	 (int) pid, method, (int) for_pid);
 
   msg = dbus_message_new_method_call (GAMEMODE_DBUS_NAME,
                                       GAMEMODE_DBUS_PATH,
@@ -160,6 +160,9 @@ gamemode_request (const char *method, pid_t for_pid)
     {
       dbus_message_iter_get_basic (&iter, &res);
     }
+
+  TRACE ("[%d] request '%s' done: %d\n",
+	 (int) pid, method, res);
 
   return res;
 }
