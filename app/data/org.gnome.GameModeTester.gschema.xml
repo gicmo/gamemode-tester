@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="gamemode-tester">
+	<schema id="org.gnome.GameModeTester" path="/org/gnome/GameModeTester/">
+	</schema>
+</schemalist>

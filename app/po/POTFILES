@@ -1,0 +1,7 @@
+data/org.gnome.GameModeTester.desktop.in
+data/org.gnome.GameModeTester.appdata.xml.in
+data/org.gnome.GameModeTester.gschema.xml
+src/gnomemode-tester-window.ui
+src/main.c
+src/gnomemode-tester-window.c
+
