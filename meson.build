@@ -12,6 +12,7 @@ project('gamemode-tester',
 i18n = import('i18n')
 gnome = import('gnome')
 
+dbus = dependency('dbus-1')
 gio  = dependency('gio-2.0', version: '>= 2.50')
 unix = dependency('gio-unix-2.0', version: '>= 2.50')
 gtk3 = dependency('gtk+-3.0', version: '>= 3.22')
@@ -34,6 +35,18 @@ add_project_arguments([
   '-I' + meson.build_root(),
 ], language: 'c')
 
+# lib
+lib_current = '0'
+lib_revision = '0'
+lib_age = '0'
+lib_version = '@0@.@1@.@2@'.format(lib_current, lib_age, lib_revision)
+
+gamemode = shared_library('gamemode',
+			  ['lib/gamemode.c'],
+			  dependencies: [dbus],
+			  install: true,
+			  soversion: lib_current,
+			  version: lib_version)
 
 # app
 subdir('app/po')
