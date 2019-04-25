@@ -32,7 +32,8 @@ struct _GmtWindow
   GtkSwitch    *sw_gamemode;
 
   /*  */
-  int         pid;
+  int      pid;
+
   /*  */
   GDBusProxy *gamemode;
 };
@@ -46,13 +47,19 @@ static void     on_bus_ready (GObject      *source,
                               GAsyncResult *res,
                               gpointer      user_data);
 
+static void     gmt_builtin_gamemode_switch (GmtWindow *self,
+                                             gboolean   enable);
+
+static void     on_builtin_switch_ready (GObject      *source,
+                                         GAsyncResult *res,
+                                         gpointer      user_data);
+
+/* ui signals */
 static gboolean on_gamemode_toggled (GmtWindow *self,
                                      gboolean   enable,
                                      GtkSwitch *toggle);
 
-static void     on_gamemode_game_registered (GObject      *source,
-                                             GAsyncResult *res,
-                                             gpointer      user_data);
+
 /* private stuff */
 
 static void
@@ -123,32 +130,26 @@ on_gamemode_toggled (GmtWindow *self,
                      gboolean   enable,
                      GtkSwitch *toggle)
 {
-  GVariant *params;
-  const char *mode = enable ? "RegisterGame" : "UnregisterGame";
-
   g_debug ("Toggled: %s", (enable ? "enable" : "disable"));
-
-  params = g_variant_new ("(i)", self->pid);
 
   gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), FALSE);
 
-
-  g_dbus_proxy_call (G_DBUS_PROXY (self->gamemode),
-                     mode,
-                     params,
-                     G_DBUS_CALL_FLAGS_NONE,
-                     -1,
-                     NULL, /* cancel */
-                     on_gamemode_game_registered,
-                     self);
+  gmt_builtin_gamemode_switch (self, enable);
 
   return TRUE;
 }
 
-static gboolean
-result_to_state (gboolean is_register, int r)
+static void
+gamemode_toggle_finish (GmtWindow *self, int r)
 {
-  if (is_register)
+  gboolean active;
+  gboolean state;
+
+  g_debug ("toggle finish: %d", r);
+
+  active = gtk_switch_get_active (self->sw_gamemode);
+
+  if (active)
     {
       /*
        *  0 if the request was accepted and the client could be registered
@@ -156,7 +157,7 @@ result_to_state (gboolean is_register, int r)
        * -2 if the request was rejected
        * */
 
-      return r == 0;
+      state = r == 0;
     }
   else
     {
@@ -165,20 +166,53 @@ result_to_state (gboolean is_register, int r)
        * -1 if the request was accepted but the client did not exist
        * -2 if the request was rejected
        */
-      return r != -2;
+      state = r != -2;
     }
+
+  g_signal_handlers_block_by_func (self->sw_gamemode, on_gamemode_toggled, self);
+
+  if (r == 0)
+    gtk_switch_set_state (self->sw_gamemode, active);
+  else
+    gtk_switch_set_active (self->sw_gamemode, state);
+
+  g_signal_handlers_unblock_by_func (self->sw_gamemode, on_gamemode_toggled, self);
+
+  gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), TRUE);
 }
 
+/* native gamemode implementation */
+
 static void
-on_gamemode_game_registered (GObject      *source,
-                             GAsyncResult *res,
-                             gpointer      user_data)
+gmt_builtin_gamemode_switch (GmtWindow *self,
+                             gboolean   enable)
+{
+  GVariant *params;
+  const char *mode = enable ? "RegisterGame" : "UnregisterGame";
+
+  g_debug ("Toggled: %s", (enable ? "enable" : "disable"));
+
+  params = g_variant_new ("(i)", self->pid);
+
+  g_dbus_proxy_call (G_DBUS_PROXY (self->gamemode),
+                     mode,
+                     params,
+                     G_DBUS_CALL_FLAGS_NONE,
+                     -1,
+                     NULL, /* cancel */
+                     on_builtin_switch_ready,
+                     self);
+}
+
+
+static void
+on_builtin_switch_ready (GObject      *source,
+                         GAsyncResult *res,
+                         gpointer      user_data)
 {
   g_autoptr(GError) err = NULL;
   g_autoptr(GVariant) val = NULL;
   GmtWindow *self = user_data;
-  gboolean active;
-  gboolean state;
   int r = -1;
 
   val = g_dbus_proxy_call_finish (G_DBUS_PROXY (self->gamemode), res, &err);
@@ -194,18 +228,5 @@ on_gamemode_game_registered (GObject      *source,
         g_warning ("request got rejected: %d", r);
     }
 
-  g_debug ("r: %d", r);
-
-  active = gtk_switch_get_active (self->sw_gamemode);
-  state = result_to_state (active, r);
-
-  g_signal_handlers_block_by_func (self->sw_gamemode, on_gamemode_toggled, self);
-  if (r == 0)
-    gtk_switch_set_state (self->sw_gamemode, active);
-  else
-    gtk_switch_set_active (self->sw_gamemode, state);
-
-  g_signal_handlers_unblock_by_func (self->sw_gamemode, on_gamemode_toggled, self);
-
-  gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), TRUE);
+  gamemode_toggle_finish (self, r);
 }
