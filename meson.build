@@ -7,11 +7,14 @@ project('gamemode-tester',
 			  'buildtype=debugoptimized']
 )
 
+cc = meson.get_compiler('c')
+
 #dependencies
 
 i18n = import('i18n')
 gnome = import('gnome')
 
+dl   = cc.find_library('dl', required: true)
 dbus = dependency('dbus-1')
 gio  = dependency('gio-2.0', version: '>= 2.50')
 unix = dependency('gio-unix-2.0', version: '>= 2.50')
@@ -65,7 +68,7 @@ app_sources += gnome.compile_resources(
 )
 
 executable('gamemode-tester', app_sources,
-  dependencies: [gio, unix, gtk3],
+  dependencies: [dl, gio, unix, gtk3],
   install: true,
 )
 

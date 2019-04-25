@@ -19,6 +19,7 @@
 #include "config.h"
 
 #include "window.h"
+#include "gamemode_client.h"
 
 #include <gio/gio.h>
 
@@ -30,7 +31,10 @@ struct _GmtWindow
   GtkHeaderBar *header_bar;
   GtkLabel     *lbl_pid;
   GtkSwitch    *sw_gamemode;
+  GtkSwitch    *sw_uselib;
 
+  /* config */
+  gboolean uselib;
   /*  */
   int      pid;
 
@@ -54,11 +58,17 @@ static void     on_builtin_switch_ready (GObject      *source,
                                          GAsyncResult *res,
                                          gpointer      user_data);
 
+static void     gmt_library_gamemode_switch (GmtWindow *self,
+                                             gboolean   enable);
+
 /* ui signals */
 static gboolean on_gamemode_toggled (GmtWindow *self,
                                      gboolean   enable,
                                      GtkSwitch *toggle);
 
+static void     on_uselib_notify (GObject    *gobject,
+                                  GParamSpec *pspec,
+                                  gpointer    user_data);
 
 /* private stuff */
 
@@ -70,6 +80,7 @@ gmt_window_class_init (GmtWindowClass *klass)
   gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/GameModeTester/window.ui");
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, header_bar);
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, lbl_pid);
+  gtk_widget_class_bind_template_child (widget_class, GmtWindow, sw_uselib);
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, sw_gamemode);
 
   gtk_widget_class_bind_template_callback (widget_class, on_gamemode_toggled);
@@ -102,6 +113,11 @@ gmt_window_init (GmtWindow *self)
                             NULL,
                             on_bus_ready,
                             self);
+
+  self->uselib = TRUE;
+  g_signal_connect_object (self->sw_uselib, "notify::active",
+                           G_CALLBACK (on_uselib_notify),
+                           self, 0);
 }
 
 static void
@@ -134,7 +150,12 @@ on_gamemode_toggled (GmtWindow *self,
 
   gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), FALSE);
 
-  gmt_builtin_gamemode_switch (self, enable);
+  g_debug ("use gamemode library: %s", (self->uselib ? "yes" :  "no"));
+
+  if (self->uselib)
+    gmt_library_gamemode_switch (self, enable);
+  else
+    gmt_builtin_gamemode_switch (self, enable);
 
   return TRUE;
 }
@@ -179,6 +200,16 @@ gamemode_toggle_finish (GmtWindow *self, int r)
   g_signal_handlers_unblock_by_func (self->sw_gamemode, on_gamemode_toggled, self);
 
   gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), TRUE);
+}
+
+static void
+on_uselib_notify (GObject    *gobject,
+                  GParamSpec *pspec,
+                  gpointer    user_data)
+{
+  GmtWindow *self = GMT_WINDOW (user_data);
+
+  self->uselib = gtk_switch_get_active (self->sw_uselib);
 }
 
 /* native gamemode implementation */
@@ -229,4 +260,48 @@ on_builtin_switch_ready (GObject      *source,
     }
 
   gamemode_toggle_finish (self, r);
+}
+
+/* gamemode library */
+static void
+switch_gamemode_thread (GTask        *task,
+                        gpointer      source_object,
+                        gpointer      task_data,
+                        GCancellable *cancellable)
+{
+  gboolean enable = !!GPOINTER_TO_INT (task_data);
+  int r;
+
+  if (enable)
+    r = gamemode_request_start ();
+  else
+    r = gamemode_request_end ();
+
+  g_task_return_int (task, r);
+}
+
+
+static void
+on_library_switch_ready (GObject      *source,
+                         GAsyncResult *res,
+                         gpointer      user_data)
+{
+  g_autoptr(GTask) task = G_TASK (res);
+  GmtWindow *wnd = GMT_WINDOW (source);
+  int r;
+
+  r = (int) g_task_propagate_int (task, NULL);
+
+  gamemode_toggle_finish (wnd, r);
+}
+
+static void
+gmt_library_gamemode_switch (GmtWindow *self,
+                             gboolean   enable)
+{
+  GTask *task;
+
+  task = g_task_new (self, NULL, on_library_switch_ready, self);
+  g_task_set_task_data (task, GINT_TO_POINTER ((gint) enable), NULL);
+  g_task_run_in_thread (task, switch_gamemode_thread);
 }
