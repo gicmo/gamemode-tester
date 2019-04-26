@@ -1,6 +1,7 @@
 
 #include <config.h>
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -37,6 +38,29 @@
 static char error_string[512] = { 0 };
 
 /* utils */
+static int log_error (const char *fmt,
+                      ...) __attribute__((format (printf, 1, 2)));
+
+static int
+log_error (const char *fmt, ...)
+{
+  va_list args;
+  int n;
+
+  va_start (args, fmt);
+  n = vsnprintf (error_string, sizeof (error_string), fmt, args);
+  va_end (args);
+
+  if (n > sizeof (error_string))
+    DEBUG ("Error log overflow");
+
+#ifndef NDEBUG
+  fprintf (stderr, "ERROR: %s \n", error_string);
+#endif
+
+  return -1;
+}
+
 static void
 hop_off_the_bus (DBusConnection **bus)
 {
@@ -58,10 +82,7 @@ hop_on_the_bus (void)
 
   if (bus == NULL)
     {
-      snprintf (error_string, sizeof (error_string),
-                "Could not connect to bus: %s", err.message);
-
-      LOG_ERROR;
+      log_error ("Could not connect to bus: %s", err.message);
       dbus_error_free (&err);
     }
 
@@ -101,19 +122,15 @@ gamemode_request (const char *method, pid_t for_pid)
   pid = (dbus_int32_t) getpid ();
 
   TRACE ("[%d] request '%s' received (%d)\n",
-	 (int) pid, method, (int) for_pid);
+         (int) pid, method, (int) for_pid);
 
   msg = dbus_message_new_method_call (GAMEMODE_DBUS_NAME,
                                       GAMEMODE_DBUS_PATH,
                                       GAMEMODE_DBUS_IFACE,
                                       method);
   if (!msg)
-    {
-      snprintf (error_string, sizeof (error_string),
-                "Could not create dbus message");
-      LOG_ERROR;
-      return -1;
-    }
+    return log_error ("Could not create dbus message");
+
 
   dbus_message_iter_init_append (msg, &iter);
   dbus_message_iter_append_basic (&iter, DBUS_TYPE_INT32, &pid);
@@ -133,36 +150,21 @@ gamemode_request (const char *method, pid_t for_pid)
   msg = dbus_pending_call_steal_reply (call);
 
   if (msg == NULL)
-    {
-      snprintf (error_string, sizeof (error_string),
-                "Did not receive a reply");
-      LOG_ERROR;
-      return -1;
-    }
+    return log_error ("Did not receive a reply");
 
   dbus_error_init (&err);
 
   if (dbus_set_error_from_message (&err, msg))
-    {
-      snprintf (error_string, sizeof (error_string),
-                "Could not call method '%s' on '%s': %s",
-                method, GAMEMODE_DBUS_IFACE, err.message);
-      LOG_ERROR;
-    }
+    log_error ("Could not call method '%s' on '%s': %s",
+               method, GAMEMODE_DBUS_IFACE, err.message);
   else if (!dbus_message_iter_init (msg, &iter) ||
            dbus_message_iter_get_arg_type (&iter) != DBUS_TYPE_INT32)
-    {
-      snprintf (error_string, sizeof (error_string),
-                "Could not unmarshal dbus message");
-      LOG_ERROR;
-    }
+    log_error ("Could not unmarshal dbus message");
   else
-    {
-      dbus_message_iter_get_basic (&iter, &res);
-    }
+    dbus_message_iter_get_basic (&iter, &res);
 
   TRACE ("[%d] request '%s' done: %d\n",
-	 (int) pid, method, res);
+         (int) pid, method, res);
 
   return res;
 }
