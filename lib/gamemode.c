@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <dbus/dbus.h>
@@ -40,6 +41,17 @@ static char error_log[512] = { 0 };
 /* utils */
 static int log_error (const char *fmt,
                       ...) __attribute__((format (printf, 1, 2)));
+
+static int
+in_flatpak (void)
+{
+  struct stat sb;
+  int r;
+
+  r = lstat ("/.flatpak-info", &sb);
+
+  return r == 0 && sb.st_size > 0;
+}
 
 static int
 log_error (const char *fmt, ...)
@@ -117,12 +129,14 @@ gamemode_request (const char *method, pid_t for_pid)
   DBusError err;
   dbus_int32_t pid;
   int res = -1;
+  int fp;
 
   bus = hop_on_the_bus ();
   pid = (dbus_int32_t) getpid ();
 
-  TRACE ("[%d] request '%s' received (%d)\n",
-         (int) pid, method, (int) for_pid);
+  fp = in_flatpak ();
+  TRACE ("[%d] request '%s' received (%d) [flatpak: %s]\n",
+         (int) pid, method, (int) for_pid, (fp ? "y" : "n"));
 
   msg = dbus_message_new_method_call (GAMEMODE_DBUS_NAME,
                                       GAMEMODE_DBUS_PATH,
