@@ -35,7 +35,7 @@
 #define _cleanup_dpc_ _cleanup_ (cleanup_pending_call)
 
 /* globals */
-static char error_string[512] = { 0 };
+static char error_log[512] = { 0 };
 
 /* utils */
 static int log_error (const char *fmt,
@@ -48,14 +48,14 @@ log_error (const char *fmt, ...)
   int n;
 
   va_start (args, fmt);
-  n = vsnprintf (error_string, sizeof (error_string), fmt, args);
+  n = vsnprintf (error_log, sizeof (error_log), fmt, args);
   va_end (args);
 
-  if (n > sizeof (error_string))
+  if (n > sizeof (error_log))
     DEBUG ("Error log overflow");
 
 #ifndef NDEBUG
-  fprintf (stderr, "ERROR: %s \n", error_string);
+  fprintf (stderr, "ERROR: %s \n", error_log);
 #endif
 
   return -1;
@@ -174,7 +174,7 @@ gamemode_request (const char *method, pid_t for_pid)
 extern const char *
 real_gamemode_error_string (void)
 {
-  return error_string;
+  return error_log;
 }
 
 extern int
