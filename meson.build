@@ -69,6 +69,7 @@ app_sources += gnome.compile_resources(
 
 executable('gamemode-tester', app_sources,
   dependencies: [dl, gio, unix, gtk3],
+  include_directories: include_directories('lib'),
   install: true,
 )
 
