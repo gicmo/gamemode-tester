@@ -26,11 +26,15 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#define _GNU_SOURCE 1
 #include <config.h>
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/types.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -40,6 +44,10 @@
 #define GAMEMODE_DBUS_NAME "com.feralinteractive.GameMode"
 #define GAMEMODE_DBUS_IFACE "com.feralinteractive.GameMode"
 #define GAMEMODE_DBUS_PATH "/com/feralinteractive/GameMode"
+
+#define PORTAL_DBUS_NAME "org.freedesktop.portal.Desktop"
+#define PORTAL_DBUS_IFACE "org.freedesktop.portal.GameMode"
+#define PORTAL_DBUS_PATH "/org/freedesktop/portal/desktop"
 
 #define DO_TRACE 1
 
@@ -61,6 +69,7 @@
 #define _cleanup_bus_ _cleanup_ (hop_off_the_bus)
 #define _cleanup_msg_ _cleanup_ (cleanup_msg)
 #define _cleanup_dpc_ _cleanup_ (cleanup_pending_call)
+#define _cleanup_fdp_ _cleanup_ (cleanup_fd_pair)
 
 /* globals */
 static char error_log[512] = { 0 };
@@ -128,6 +137,7 @@ hop_on_the_bus (void)
   return bus;
 }
 
+/* cleanup functions */
 static void
 cleanup_msg (DBusMessage **msg)
 {
@@ -146,8 +156,80 @@ cleanup_pending_call (DBusPendingCall **call)
   dbus_pending_call_unref (*call);
 }
 
+static void
+cleanup_fd (int *fd)
+{
+  if (fd == NULL || *fd == 0)
+    return;
+
+  (void) close (*fd);
+}
+
+static void
+cleanup_fd_pair (int (*fdp)[2])
+{
+  int *fd;
+
+  if (fdp == NULL)
+    return;
+
+  fd = *fdp;
+
+  for (int i = 0; i < 2; i++)
+    if (fd[i] > -1)
+      (void) close (fd[i]);
+}
+
+
+/* socket helper */
 static int
-gamemode_request (const char *method, pid_t for_pid)
+send_fd (int sock, const char *data, size_t len, int fd)
+{
+  struct iovec iov = {
+    .iov_base = (void *) data,
+    .iov_len = len,
+  };
+
+  union
+  {
+    struct cmsghdr cmh;
+    char           data[CMSG_SPACE (sizeof (int))];
+  } ctrl = {};
+  struct msghdr msg = {
+    .msg_iov = &iov,
+    .msg_iovlen = 1,
+  };
+  int r;
+
+  if (fd > 0)
+    {
+      struct cmsghdr *cmh;
+
+      msg.msg_control = &ctrl;
+      msg.msg_controllen = sizeof (ctrl);
+
+      cmh = CMSG_FIRSTHDR (&msg);
+
+      cmh->cmsg_level = SOL_SOCKET;
+      cmh->cmsg_type = SCM_RIGHTS;
+      cmh->cmsg_len = CMSG_LEN (sizeof (int));
+
+      memcpy (CMSG_DATA (cmh), &fd, sizeof (int));
+
+    }
+
+  r = sendmsg (sock, &msg, MSG_NOSIGNAL);
+
+  if (r < 0)
+    return -errno;
+
+  return 0;
+}
+
+
+/* internal API */
+static int
+gamemode_request_native (const char *method, pid_t for_pid)
 {
   _cleanup_bus_ DBusConnection *bus = NULL;
   _cleanup_msg_ DBusMessage *msg = NULL;
@@ -156,14 +238,9 @@ gamemode_request (const char *method, pid_t for_pid)
   DBusError err;
   dbus_int32_t pid;
   int res = -1;
-  int fp;
 
   bus = hop_on_the_bus ();
   pid = (dbus_int32_t) getpid ();
-
-  fp = in_flatpak ();
-  TRACE ("[%d] request '%s' received (%d) [flatpak: %s]\n",
-         (int) pid, method, (int) for_pid, (fp ? "y" : "n"));
 
   msg = dbus_message_new_method_call (GAMEMODE_DBUS_NAME,
                                       GAMEMODE_DBUS_PATH,
@@ -208,6 +285,101 @@ gamemode_request (const char *method, pid_t for_pid)
          (int) pid, method, res);
 
   return res;
+}
+
+static int
+gamemode_request_portal (const char *method, pid_t for_pid)
+{
+  _cleanup_bus_ DBusConnection *bus = NULL;
+  _cleanup_msg_ DBusMessage *msg = NULL;
+  _cleanup_dpc_ DBusPendingCall *call = NULL;
+  _cleanup_fdp_ int wire[2] = {-1, };
+  _cleanup_fdp_ int data[2] = {-1, };
+  DBusMessageIter iter;
+  DBusError err;
+  int res = -1;
+  int r;
+
+  bus = hop_on_the_bus ();
+
+  r = socketpair (AF_UNIX, SOCK_STREAM, 0, wire);
+
+  if (r == -1)
+    return log_error ("Could not create socket: %m");
+
+  r = socketpair (AF_UNIX, SOCK_STREAM, 0, data);
+
+  if (r == -1)
+    return log_error ("Could not create socket: %m");
+
+  msg = dbus_message_new_method_call (PORTAL_DBUS_NAME,
+                                      PORTAL_DBUS_PATH,
+                                      PORTAL_DBUS_IFACE,
+                                      "Action");
+  if (!msg)
+    return log_error ("Could not create dbus message");
+
+
+  dbus_message_iter_init_append (msg, &iter);
+  dbus_message_iter_append_basic (&iter, DBUS_TYPE_UNIX_FD, &(wire[1]));
+
+  if (for_pid != 0)
+    {
+      dbus_int32_t p = (dbus_int32_t) for_pid;
+      dbus_message_iter_append_basic (&iter, DBUS_TYPE_INT32, &p);
+    }
+
+  dbus_connection_send_with_reply (bus, msg, &call, -1);
+  dbus_connection_flush (bus);
+  dbus_message_unref (msg);
+  msg = NULL;
+
+  r = send_fd (wire[0], method, strlen (method), data[1]);
+  if (r < 0)
+    return log_error ("could not send fd: %m");
+
+  dbus_pending_call_block (call);
+  msg = dbus_pending_call_steal_reply (call);
+
+  if (msg == NULL)
+    return log_error ("Did not receive a reply");
+
+  dbus_error_init (&err);
+
+  if (dbus_set_error_from_message (&err, msg))
+    log_error ("Could not call method '%s' on '%s': %s",
+               method, GAMEMODE_DBUS_IFACE, err.message);
+  else if (!dbus_message_iter_init (msg, &iter) ||
+           dbus_message_iter_get_arg_type (&iter) != DBUS_TYPE_INT32)
+    log_error ("Could not unmarshal dbus message");
+  else
+    dbus_message_iter_get_basic (&iter, &res);
+
+  return res;
+}
+
+static int
+gamemode_request (const char *method, pid_t for_pid)
+{
+  int flatpak;
+  pid_t pid;
+  int r;
+
+  pid = getpid ();
+  flatpak = in_flatpak ();
+
+  TRACE ("GM: [%d] request '%s' received (%d) [flatpak: %s]\n",
+         (int) pid, method, (int) for_pid, (flatpak ? "y" : "n"));
+
+  if (flatpak)
+    r = gamemode_request_portal (method, for_pid);
+  else
+    r = gamemode_request_native (method, for_pid);
+
+  TRACE ("GM: [%d] request '%s' done: %d\n",
+         (int) pid, method, r);
+
+  return r;
 }
 
 /* the external API */
