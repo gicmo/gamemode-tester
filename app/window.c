@@ -40,6 +40,7 @@ struct _GmtWindow
   GtkLabel     *lbl_pid;
   GtkSwitch    *sw_gamemode;
   GtkSwitch    *sw_uselib;
+  GtkLabel     *lbl_flatpak;
 
   /* config */
   gboolean uselib;
@@ -98,6 +99,7 @@ gmt_window_class_init (GmtWindowClass *klass)
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, lbl_pid);
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, sw_uselib);
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, sw_gamemode);
+  gtk_widget_class_bind_template_child (widget_class, GmtWindow, lbl_flatpak);
 
   gtk_widget_class_bind_template_callback (widget_class, on_gamemode_toggled);
 }
@@ -110,13 +112,27 @@ gmt_window_class_init (GmtWindowClass *klass)
 #define PORTAL_DBUS_IFACE "org.freedesktop.portal.GameMode"
 #define PORTAL_DBUS_PATH "/org/freedesktop/portal/desktop"
 
+static int
+in_flatpak (void)
+{
+  struct stat sb;
+  int r;
+
+  r = lstat ("/.flatpak-info", &sb);
+
+  return r == 0 && sb.st_size > 0;
+}
+
 static void
 gmt_window_init (GmtWindow *self)
 {
   g_autoptr(GCredentials) creds = NULL;
   g_autofree char *pidstr = NULL;
+  gboolean boxed;
 
-  self->portal = TRUE;
+  boxed = in_flatpak ();
+
+  self->portal = boxed;
 
   gtk_widget_init_template (GTK_WIDGET (self));
 
@@ -130,6 +146,9 @@ gmt_window_init (GmtWindow *self)
   g_signal_connect_object (self->sw_uselib, "notify::active",
                            G_CALLBACK (on_uselib_notify),
                            self, 0);
+
+
+  gtk_label_set_text (self->lbl_flatpak, boxed ? "yes" : "no");
 }
 
 
