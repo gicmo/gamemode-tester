@@ -115,8 +115,6 @@ gmt_window_init (GmtWindow *self)
 {
   g_autoptr(GCredentials) creds = NULL;
   g_autofree char *pidstr = NULL;
-  GDBusProxyFlags flags;
-  gboolean portal = TRUE;
 
   self->portal = TRUE;
 
@@ -124,18 +122,9 @@ gmt_window_init (GmtWindow *self)
 
   creds = g_credentials_new ();
   self->pid = g_credentials_get_unix_pid (creds, NULL);
+
   pidstr = g_strdup_printf ("%d", self->pid);
   gtk_label_set_text (self->lbl_pid, pidstr);
-
-  flags = G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START_AT_CONSTRUCTION;
-  g_dbus_proxy_new_for_bus (G_BUS_TYPE_SESSION,
-                            flags, NULL,
-                            portal ? PORTAL_DBUS_NAME : GAMEMODE_DBUS_NAME,
-                            portal ? PORTAL_DBUS_PATH : GAMEMODE_DBUS_PATH,
-                            portal ? PORTAL_DBUS_IFACE : GAMEMODE_DBUS_IFACE,
-                            NULL,
-                            on_bus_ready,
-                            self);
 
   self->uselib = TRUE;
   g_signal_connect_object (self->sw_uselib, "notify::active",
@@ -143,30 +132,6 @@ gmt_window_init (GmtWindow *self)
                            self, 0);
 }
 
-static void
-on_bus_ready (GObject      *source,
-              GAsyncResult *res,
-              gpointer      user_data)
-{
-  g_autoptr(GError) err = NULL;
-  GmtWindow *self;
-  const char *name;
-
-  self = GMT_WINDOW (user_data);
-
-  self->gamemode = g_dbus_proxy_new_for_bus_finish (res, &err);
-
-  if (self->gamemode == NULL)
-    {
-      g_warning ("could not create gamemode proxy: %s", err->message);
-      return;
-    }
-  name = g_dbus_connection_get_unique_name (g_dbus_proxy_get_connection (self->gamemode));
-
-  g_debug ("my name: %s", name);
-
-  gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), TRUE);
-}
 
 static gboolean
 on_gamemode_toggled (GmtWindow *self,
@@ -181,8 +146,6 @@ on_gamemode_toggled (GmtWindow *self,
 
   if (self->uselib)
     gmt_library_gamemode_switch (self, enable);
-  else if (self->portal)
-    gmt_portal_gamemode_switch (self, enable);
   else
     gmt_builtin_gamemode_switch (self, enable);
 
@@ -242,188 +205,149 @@ on_uselib_notify (GObject    *gobject,
 }
 
 /* native gamemode implementation */
-typedef struct PortalCall
+typedef struct CallData_
 {
-  GmtWindow *wnd;
-  int        wire[2];
-  int        data[2];
-} PortalCall;
+  char       *method;
+  GVariant   *params;
+  gboolean    portal;
+  GDBusProxy *proxy;
+} CallData;
 
-static gboolean
-make_socketpair (int domain, int type, int proto, int sv[2], GError **error)
+static void
+call_data_free (gpointer data)
 {
-  int r;
+  CallData *call = data;
 
-  r = socketpair (domain, type, proto, sv);
-
-  if (r == -1)
-    {
-      g_set_error (error, G_IO_ERROR, g_io_error_from_errno (errno),
-                   "could not create socket pair: %s",
-                   g_strerror (errno));
-      return FALSE;
-    }
-
-  return TRUE;
+  g_free (call->method);
+  g_variant_unref (call->params);
+  g_clear_object (&call->proxy);
+  g_slice_free (CallData, call);
 }
 
 static void
-portal_call_destroy (PortalCall *call)
-{
-  if (call == NULL)
-    return;
-
-  close (call->wire[0]);
-  close (call->wire[1]);
-
-  close (call->data[0]);
-  close (call->data[1]);
-
-  g_object_unref (call->wnd);
-  g_slice_free (PortalCall, call);
-}
-
-G_DEFINE_AUTOPTR_CLEANUP_FUNC (PortalCall, portal_call_destroy);
-
-PortalCall *
-gmt_window_portal_call_new (GmtWindow *self, GError **error)
-{
-  g_autoptr(PortalCall) call = NULL;
-  gboolean ok;
-
-  call = g_slice_new0 (PortalCall);
-
-  ok = make_socketpair (AF_UNIX, SOCK_STREAM, 0, call->wire, error);
-
-  if (!ok)
-    return NULL;
-
-  ok = make_socketpair (AF_UNIX, SOCK_STREAM, 0, call->data, error);
-
-  if (!ok)
-    return NULL;
-
-  call->wnd = g_object_ref (self);
-
-  return g_steal_pointer (&call);
-}
-
-static int
-send_fd (int sock, const char *data, size_t len, int fd)
-{
-  struct iovec iov = {
-    .iov_base = (void *) data,
-    .iov_len = len,
-  };
-
-  union
-  {
-    struct cmsghdr cmh;
-    char           data[CMSG_SPACE (sizeof (int))];
-  } ctrl = {};
-  struct msghdr msg = {
-    .msg_iov = &iov,
-    .msg_iovlen = 1,
-  };
-  int r;
-
-  if (fd > 0)
-    {
-      struct cmsghdr *cmh;
-
-      msg.msg_control = &ctrl;
-      msg.msg_controllen = sizeof (ctrl);
-
-      cmh = CMSG_FIRSTHDR (&msg);
-
-      cmh->cmsg_level = SOL_SOCKET;
-      cmh->cmsg_type = SCM_RIGHTS;
-      cmh->cmsg_len = CMSG_LEN (sizeof (int));
-
-      memcpy (CMSG_DATA (cmh), &fd, sizeof (int));
-
-    }
-
-  r = sendmsg (sock, &msg, MSG_NOSIGNAL);
-
-  if (r < 0)
-    return -errno;
-
-  return 0;
-}
-
-
-static void
-on_portal_switch_ready (GObject      *source,
+on_gamemode_call_ready (GObject      *source,
                         GAsyncResult *res,
                         gpointer      user_data)
 {
   g_autoptr(GError) err = NULL;
   g_autoptr(GVariant) val = NULL;
-  g_autoptr(PortalCall) call = user_data;
-  GmtWindow *self = call->wnd;
+  GTask *task = G_TASK (user_data);
+  CallData *call;
   int r = -1;
 
-  val =  g_dbus_proxy_call_with_unix_fd_list_finish (G_DBUS_PROXY (self->gamemode),
-                                                     NULL,
-                                                     res,
-                                                     &err);
+  call = g_task_get_task_data (task);
+
+  val = g_dbus_proxy_call_finish (G_DBUS_PROXY (call->proxy), res, &err);
   if (val == NULL)
     {
       g_warning ("could not talk to gamemode: %s", err->message);
-    }
-  else
-    {
-      g_variant_get (val, "(i)", &r);
-
-      if (r != 0)
-        g_warning ("request got rejected: %d", r);
-    }
-
-  gamemode_toggle_finish (self, r);
-}
-
-
-static void
-gmt_portal_gamemode_switch (GmtWindow *self,
-                            gboolean   enable)
-{
-  g_autoptr(GError) err = NULL;
-  g_autoptr(GUnixFDList) fds = NULL;
-  g_autofree char *path = NULL;
-  const char *mode = enable ? "RegisterGame" : "UnregisterGame";
-  PortalCall *call;
-  ssize_t r;
-
-  call = gmt_window_portal_call_new (self, &err);
-
-  if (call == NULL)
-    {
-      g_warning ("could not create call: %s", err->message);
-      gamemode_toggle_finish (self, -1);
+      g_task_return_error (task, g_steal_pointer (&err));
       return;
     }
 
-  fds = g_unix_fd_list_new_from_array (&call->wire[1], 1);
-
-  g_dbus_proxy_call_with_unix_fd_list (G_DBUS_PROXY (self->gamemode),
-                                       "Action",
-                                       g_variant_new ("(h)", 0),
-                                       G_DBUS_CALL_FLAGS_NONE,
-                                       -1,
-                                       fds,
-                                       NULL, /* cancel */
-                                       on_portal_switch_ready,
-                                       call);
-
-  g_debug ("sending fd");
-  r = send_fd (call->wire[0], mode, strlen (mode), call->data[1]);
+  g_variant_get (val, "(i)", &r);
   if (r < 0)
-    g_warning ("could not send fd: %s", g_strerror (errno));
-  else
-    g_debug ("fd sent");
+    {
+      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+                               "GameMode error"); //TODO: better error message
+      return;
+    }
+
+  g_task_return_int (task, r);
+  g_object_unref (task);
 }
 
+static void
+on_bus_ready (GObject      *source,
+              GAsyncResult *res,
+              gpointer      user_data)
+{
+  g_autoptr(GError) err = NULL;
+  GTask *task = user_data;
+  CallData *call;
+  const char *name;
+
+  call = g_task_get_task_data (task);
+  call->proxy = g_dbus_proxy_new_for_bus_finish (res, &err);
+
+  if (call->proxy == NULL)
+    {
+      g_warning ("could not create gamemode proxy: %s", err->message);
+      g_task_return_error (task, g_steal_pointer (&err));
+      return;
+    }
+  name = g_dbus_connection_get_unique_name (g_dbus_proxy_get_connection (call->proxy));
+
+  g_debug ("my name: %s", name);
+
+  g_dbus_proxy_call (G_DBUS_PROXY (call->proxy),
+                     call->method,
+                     call->params,
+                     G_DBUS_CALL_FLAGS_NONE,
+                     -1,
+                     NULL, /* cancel */
+                     on_gamemode_call_ready,
+                     task);
+}
+
+static GDBusProxy *
+call_gamemode (GmtWindow          *window,
+               const char         *method,
+               GVariant           *params,
+               gboolean            portal,
+               GAsyncReadyCallback callback,
+               gpointer            user_data)
+{
+  CallData *data;
+  GTask *task;
+  GDBusProxyFlags flags;
+
+  data = g_slice_new0 (CallData);
+  data->method = g_strdup (method);
+  data->params = g_variant_ref_sink (params);
+  data->portal = portal;
+
+  task = g_task_new (window, NULL, callback, user_data);
+  g_task_set_task_data (task, data, call_data_free);
+
+  flags = G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START_AT_CONSTRUCTION;
+  g_dbus_proxy_new_for_bus (G_BUS_TYPE_SESSION,
+                            flags, NULL,
+                            portal ? PORTAL_DBUS_NAME : GAMEMODE_DBUS_NAME,
+                            portal ? PORTAL_DBUS_PATH : GAMEMODE_DBUS_PATH,
+                            portal ? PORTAL_DBUS_IFACE : GAMEMODE_DBUS_IFACE,
+                            NULL,
+                            on_bus_ready,
+                            task);
+
+}
+
+static int
+call_gamemode_finish (GAsyncResult *res,
+                      GError      **error)
+{
+  gssize r;
+
+  r = g_task_propagate_int (G_TASK (res), error);
+
+  return (int) r;
+}
+
+static void
+on_builtin_switch_ready (GObject      *source,
+                         GAsyncResult *res,
+                         gpointer      user_data)
+{
+  g_autoptr(GError) err = NULL;
+  GmtWindow *self = user_data;
+  int r = -1;
+
+  r = call_gamemode_finish (res, &err);
+  if (r < 0)
+    g_warning ("could not talk to gamemode: %s", err->message);
+
+  gamemode_toggle_finish (self, r);
+}
 
 static void
 gmt_builtin_gamemode_switch (GmtWindow *self,
@@ -436,41 +360,14 @@ gmt_builtin_gamemode_switch (GmtWindow *self,
 
   params = g_variant_new ("(i)", self->pid);
 
-  g_dbus_proxy_call (G_DBUS_PROXY (self->gamemode),
-                     mode,
-                     params,
-                     G_DBUS_CALL_FLAGS_NONE,
-                     -1,
-                     NULL, /* cancel */
-                     on_builtin_switch_ready,
-                     self);
+  call_gamemode (self,
+                 mode,
+                 params,
+                 self->portal,
+                 on_builtin_switch_ready,
+                 self);
 }
 
-static void
-on_builtin_switch_ready (GObject      *source,
-                         GAsyncResult *res,
-                         gpointer      user_data)
-{
-  g_autoptr(GError) err = NULL;
-  g_autoptr(GVariant) val = NULL;
-  GmtWindow *self = user_data;
-  int r = -1;
-
-  val = g_dbus_proxy_call_finish (G_DBUS_PROXY (self->gamemode), res, &err);
-  if (val == NULL)
-    {
-      g_warning ("could not talk to gamemode: %s", err->message);
-    }
-  else
-    {
-      g_variant_get (val, "(i)", &r);
-
-      if (r != 0)
-        g_warning ("request got rejected: %d", r);
-    }
-
-  gamemode_toggle_finish (self, r);
-}
 
 /* gamemode library */
 static void

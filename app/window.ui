@@ -27,7 +27,7 @@
         <child>
           <object class="GtkSwitch" id="sw_gamemode">
             <property name="visible">True</property>
-            <property name="sensitive">False</property>
+            <property name="sensitive">True</property>
             <property name="can_focus">True</property>
             <signal name="state-set" handler="on_gamemode_toggled" object="GmtWindow" swapped="yes"/>
           </object>
