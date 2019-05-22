@@ -76,6 +76,8 @@
           <object class="GtkSwitch" id="sw_gamemode">
             <property name="visible">True</property>
             <property name="can_focus">True</property>
+            <property name="halign">start</property>
+            <property name="valign">start</property>
             <signal name="state-set" handler="on_gamemode_toggled" object="GmtWindow" swapped="yes"/>
           </object>
           <packing>
@@ -109,11 +111,61 @@
           <object class="GtkSwitch" id="sw_uselib">
             <property name="visible">True</property>
             <property name="can_focus">True</property>
+            <property name="halign">start</property>
+            <property name="valign">start</property>
             <property name="active">True</property>
           </object>
           <packing>
             <property name="left_attach">1</property>
             <property name="top_attach">1</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkLabel">
+            <property name="visible">True</property>
+            <property name="can_focus">False</property>
+            <property name="label" translatable="yes">Query status:</property>
+          </object>
+          <packing>
+            <property name="left_attach">0</property>
+            <property name="top_attach">4</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkLabel" id="lbl_status">
+            <property name="visible">True</property>
+            <property name="can_focus">False</property>
+            <property name="label" translatable="yes">?</property>
+          </object>
+          <packing>
+            <property name="left_attach">1</property>
+            <property name="top_attach">4</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkLabel">
+            <property name="visible">True</property>
+            <property name="can_focus">False</property>
+          </object>
+          <packing>
+            <property name="left_attach">0</property>
+            <property name="top_attach">5</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkButton" id="btn_refresh">
+            <property name="label">gtk-refresh</property>
+            <property name="visible">True</property>
+            <property name="can_focus">True</property>
+            <property name="receives_default">True</property>
+            <property name="halign">start</property>
+            <property name="valign">start</property>
+            <property name="use_stock">True</property>
+            <signal name="clicked" handler="on_refresh_clicked" object="GmtWindow" swapped="yes"/>
+          </object>
+          <packing>
+            <property name="left_attach">1</property>
+            <property name="top_attach">5</property>
           </packing>
         </child>
       </object>

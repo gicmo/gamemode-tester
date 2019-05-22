@@ -41,6 +41,8 @@ struct _GmtWindow
   GtkSwitch    *sw_gamemode;
   GtkSwitch    *sw_uselib;
   GtkLabel     *lbl_flatpak;
+  GtkLabel     *lbl_status;
+  GtkWidget    *btn_refresh;
 
   /* config */
   gboolean uselib;
@@ -65,8 +67,7 @@ static void     on_bus_ready (GObject      *source,
 static void     gmt_builtin_gamemode_switch (GmtWindow *self,
                                              gboolean   enable);
 
-static void     gmt_portal_gamemode_switch (GmtWindow *self,
-                                            gboolean   enable);
+static void     gmt_builtin_query_status (GmtWindow *self);
 
 static void     on_builtin_switch_ready (GObject      *source,
                                          GAsyncResult *res,
@@ -75,10 +76,15 @@ static void     on_builtin_switch_ready (GObject      *source,
 static void     gmt_library_gamemode_switch (GmtWindow *self,
                                              gboolean   enable);
 
+static void     gmt_library_query_status (GmtWindow *self);
+
 /* ui signals */
 static gboolean on_gamemode_toggled (GmtWindow *self,
                                      gboolean   enable,
                                      GtkSwitch *toggle);
+
+static void     on_refresh_clicked (GmtWindow *self,
+                                    GtkButton *button);
 
 static void     on_uselib_notify (GObject    *gobject,
                                   GParamSpec *pspec,
@@ -100,8 +106,11 @@ gmt_window_class_init (GmtWindowClass *klass)
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, sw_uselib);
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, sw_gamemode);
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, lbl_flatpak);
+  gtk_widget_class_bind_template_child (widget_class, GmtWindow, lbl_status);
+  gtk_widget_class_bind_template_child (widget_class, GmtWindow, btn_refresh);
 
   gtk_widget_class_bind_template_callback (widget_class, on_gamemode_toggled);
+  gtk_widget_class_bind_template_callback (widget_class, on_refresh_clicked);
 }
 
 #define GAMEMODE_DBUS_NAME "com.feralinteractive.GameMode"
@@ -223,6 +232,36 @@ on_uselib_notify (GObject    *gobject,
   self->uselib = gtk_switch_get_active (self->sw_uselib);
 }
 
+/* refresh handling */
+static void
+on_refresh_clicked (GmtWindow *self,
+                    GtkButton *button)
+{
+  g_debug ("Refreshing");
+
+  gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), FALSE);
+  gtk_widget_set_sensitive (GTK_WIDGET (self->btn_refresh), FALSE);
+
+  g_debug ("use gamemode library: %s", (self->uselib ? "yes" :  "no"));
+
+  if (self->uselib)
+    gmt_library_query_status (self);
+  else
+    gmt_builtin_query_status (self);
+}
+
+static void
+refresh_finish (GmtWindow *self, int r)
+{
+  g_autofree char *text = NULL;
+
+  text = g_strdup_printf ("%d", r);
+  gtk_label_set_text (self->lbl_status, text);
+
+  gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), TRUE);
+  gtk_widget_set_sensitive (GTK_WIDGET (self->btn_refresh), TRUE);
+}
+
 /* native gamemode implementation */
 typedef struct CallData_
 {
@@ -309,7 +348,7 @@ on_bus_ready (GObject      *source,
                      task);
 }
 
-static GDBusProxy *
+static void
 call_gamemode (GmtWindow          *window,
                const char         *method,
                GVariant           *params,
@@ -338,7 +377,6 @@ call_gamemode (GmtWindow          *window,
                             NULL,
                             on_bus_ready,
                             task);
-
 }
 
 static int
@@ -387,6 +425,39 @@ gmt_builtin_gamemode_switch (GmtWindow *self,
                  self);
 }
 
+static void
+on_builtin_query_status_ready (GObject      *source,
+                               GAsyncResult *res,
+                               gpointer      user_data)
+{
+  g_autoptr(GError) err = NULL;
+  GmtWindow *self = user_data;
+  int r = -1;
+
+  r = call_gamemode_finish (res, &err);
+  if (r < 0)
+    g_warning ("could not talk to gamemode: %s", err->message);
+
+  refresh_finish (self, r);
+}
+
+static void
+gmt_builtin_query_status (GmtWindow *self)
+{
+  GVariant *params;
+
+  g_debug ("Builtin Query Status");
+
+  params = g_variant_new ("(i)", self->pid);
+
+  call_gamemode (self,
+                 "QueryStatus",
+                 params,
+                 self->portal,
+                 on_builtin_query_status_ready,
+                 self);
+
+}
 
 /* gamemode library */
 static void
@@ -405,7 +476,6 @@ switch_gamemode_thread (GTask        *task,
 
   g_task_return_int (task, r);
 }
-
 
 static void
 on_library_switch_ready (GObject      *source,
@@ -430,4 +500,40 @@ gmt_library_gamemode_switch (GmtWindow *self,
   task = g_task_new (self, NULL, on_library_switch_ready, self);
   g_task_set_task_data (task, GINT_TO_POINTER ((gint) enable), NULL);
   g_task_run_in_thread (task, switch_gamemode_thread);
+}
+
+static void
+query_status_thread (GTask        *task,
+                     gpointer      source_object,
+                     gpointer      task_data,
+                     GCancellable *cancellable)
+{
+  int r;
+
+  r = gamemode_query_status ();
+
+  g_task_return_int (task, r);
+}
+
+static void
+on_status_thread_ready (GObject      *source,
+                        GAsyncResult *res,
+                        gpointer      user_data)
+{
+  g_autoptr(GTask) task = G_TASK (res);
+  GmtWindow *wnd = GMT_WINDOW (source);
+  int r;
+
+  r = (int) g_task_propagate_int (task, NULL);
+
+  refresh_finish (wnd, r);
+}
+
+static void
+gmt_library_query_status (GmtWindow *self)
+{
+  GTask *task;
+
+  task = g_task_new (self, NULL, on_status_thread_ready, self);
+  g_task_run_in_thread (task, query_status_thread);
 }
