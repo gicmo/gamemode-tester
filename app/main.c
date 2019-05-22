@@ -33,8 +33,6 @@ on_activate (GtkApplication *app)
     {
       window = g_object_new (GMT_TYPE_WINDOW,
                              "application", app,
-                             "default-width", 600,
-                             "default-height", 300,
                              NULL);
     }
 

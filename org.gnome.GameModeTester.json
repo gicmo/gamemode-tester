@@ -34,6 +34,17 @@
         "*.a"
     ],
     "modules": [
+    	{
+            "name": "gamemode-libdbus",
+            "builddir": true,
+            "buildsystem": "meson",
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/gicmo/gamemode-libdbus.git"
+                }
+            ]
+        },
         {
             "name": "gamemode-tester",
             "builddir": true,

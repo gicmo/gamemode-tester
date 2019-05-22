@@ -19,6 +19,7 @@ dbus = dependency('dbus-1')
 gio  = dependency('gio-2.0', version: '>= 2.50')
 unix = dependency('gio-unix-2.0', version: '>= 2.50')
 gtk3 = dependency('gtk+-3.0', version: '>= 3.22')
+gmld = dependency('gamemode-libdbus', version: '>= 0.1')
 
 prefixdir = get_option('prefix')
 localedir = join_paths(prefixdir, get_option('localedir'))
@@ -38,18 +39,6 @@ add_project_arguments([
   '-I' + meson.build_root(),
 ], language: 'c')
 
-# lib
-lib_current = '0'
-lib_revision = '0'
-lib_age = '0'
-lib_version = '@0@.@1@.@2@'.format(lib_current, lib_age, lib_revision)
-
-gamemode = shared_library('gamemode',
-			  ['lib/gamemode.c'],
-			  dependencies: [dbus],
-			  install: true,
-			  soversion: lib_current,
-			  version: lib_version)
 
 # app
 subdir('app/po')
@@ -68,8 +57,7 @@ app_sources += gnome.compile_resources(
 )
 
 executable('gamemode-tester', app_sources,
-  dependencies: [dl, gio, unix, gtk3],
-  include_directories: include_directories('lib'),
+  dependencies: [dl, gio, unix, gtk3, gmld],
   install: true,
 )
 
