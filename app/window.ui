@@ -25,22 +25,11 @@
         <property name="row_spacing">6</property>
         <property name="column_spacing">6</property>
         <child>
-          <object class="GtkSwitch" id="sw_gamemode">
-            <property name="visible">True</property>
-            <property name="can_focus">True</property>
-            <signal name="state-set" handler="on_gamemode_toggled" object="GmtWindow" swapped="yes"/>
-          </object>
-          <packing>
-            <property name="left_attach">1</property>
-            <property name="top_attach">1</property>
-          </packing>
-        </child>
-        <child>
           <object class="GtkLabel">
             <property name="visible">True</property>
             <property name="can_focus">False</property>
             <property name="hexpand">True</property>
-            <property name="label" translatable="yes">Request gamemode</property>
+            <property name="label" translatable="yes">Use external library</property>
             <property name="justify">right</property>
           </object>
           <packing>
@@ -75,7 +64,7 @@
           <object class="GtkLabel">
             <property name="visible">True</property>
             <property name="can_focus">False</property>
-            <property name="label" translatable="yes">Use native library</property>
+            <property name="label" translatable="yes">Request gamemode</property>
             <property name="justify">right</property>
           </object>
           <packing>
@@ -84,10 +73,10 @@
           </packing>
         </child>
         <child>
-          <object class="GtkSwitch" id="sw_uselib">
+          <object class="GtkSwitch" id="sw_gamemode">
             <property name="visible">True</property>
             <property name="can_focus">True</property>
-            <property name="active">True</property>
+            <signal name="state-set" handler="on_gamemode_toggled" object="GmtWindow" swapped="yes"/>
           </object>
           <packing>
             <property name="left_attach">1</property>
@@ -114,6 +103,17 @@
           <packing>
             <property name="left_attach">1</property>
             <property name="top_attach">3</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkSwitch" id="sw_uselib">
+            <property name="visible">True</property>
+            <property name="can_focus">True</property>
+            <property name="active">True</property>
+          </object>
+          <packing>
+            <property name="left_attach">1</property>
+            <property name="top_attach">1</property>
           </packing>
         </child>
       </object>
