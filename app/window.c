@@ -160,6 +160,13 @@ gmt_window_init (GmtWindow *self)
   gtk_label_set_text (self->lbl_flatpak, boxed ? "yes" : "no");
 }
 
+static void
+gmt_startstop_operation (GmtWindow *self, gboolean starting)
+{
+  gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), !starting);
+  gtk_widget_set_sensitive (GTK_WIDGET (self->sw_uselib), !starting);
+  gtk_widget_set_sensitive (GTK_WIDGET (self->btn_refresh), !starting);
+}
 
 static gboolean
 on_gamemode_toggled (GmtWindow *self,
@@ -168,7 +175,7 @@ on_gamemode_toggled (GmtWindow *self,
 {
   g_debug ("Toggled: %s", (enable ? "enable" : "disable"));
 
-  gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), FALSE);
+  gmt_startstop_operation (self, TRUE);
 
   g_debug ("use gamemode library: %s", (self->uselib ? "yes" :  "no"));
 
@@ -219,7 +226,7 @@ gamemode_toggle_finish (GmtWindow *self, int r)
 
   g_signal_handlers_unblock_by_func (self->sw_gamemode, on_gamemode_toggled, self);
 
-  gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), TRUE);
+  gmt_startstop_operation (self, FALSE);
 }
 
 static void
@@ -239,8 +246,7 @@ on_refresh_clicked (GmtWindow *self,
 {
   g_debug ("Refreshing");
 
-  gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), FALSE);
-  gtk_widget_set_sensitive (GTK_WIDGET (self->btn_refresh), FALSE);
+  gmt_startstop_operation (self, TRUE);
 
   g_debug ("use gamemode library: %s", (self->uselib ? "yes" :  "no"));
 
@@ -258,8 +264,7 @@ refresh_finish (GmtWindow *self, int r)
   text = g_strdup_printf ("%d", r);
   gtk_label_set_text (self->lbl_status, text);
 
-  gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), TRUE);
-  gtk_widget_set_sensitive (GTK_WIDGET (self->btn_refresh), TRUE);
+  gmt_startstop_operation (self, FALSE);
 }
 
 /* native gamemode implementation */
