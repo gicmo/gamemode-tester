@@ -42,7 +42,14 @@ struct _GmtWindow
   GtkSwitch    *sw_uselib;
   GtkLabel     *lbl_flatpak;
   GtkLabel     *lbl_status;
-  GtkWidget    *btn_refresh;
+  GtkButton    *btn_refresh;
+
+  GtkComboBox  *cbx_call;
+  GtkEntry     *txt_target;
+  GtkEntry     *txt_requester;
+  GtkButton    *btn_call;
+  GtkLabel     *lbl_result;
+
 
   /* config */
   gboolean uselib;
@@ -90,6 +97,12 @@ static void     on_uselib_notify (GObject    *gobject,
                                   GParamSpec *pspec,
                                   gpointer    user_data);
 
+static void     on_docall_clicked (GmtWindow *self,
+                                   GtkButton *button);
+
+static void     on_call_selected  (GmtWindow *self,
+                                   GtkComboBox *widget);
+
 int gmt_setup_socket (GmtWindow          *self,
                       struct sockaddr_un *sau,
                       socklen_t          *sl);
@@ -109,8 +122,16 @@ gmt_window_class_init (GmtWindowClass *klass)
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, lbl_status);
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, btn_refresh);
 
+  gtk_widget_class_bind_template_child (widget_class, GmtWindow, cbx_call);
+  gtk_widget_class_bind_template_child (widget_class, GmtWindow, txt_target);
+  gtk_widget_class_bind_template_child (widget_class, GmtWindow, txt_requester);
+  gtk_widget_class_bind_template_child (widget_class, GmtWindow, btn_call);
+  gtk_widget_class_bind_template_child (widget_class, GmtWindow, lbl_result);
+
   gtk_widget_class_bind_template_callback (widget_class, on_gamemode_toggled);
   gtk_widget_class_bind_template_callback (widget_class, on_refresh_clicked);
+  gtk_widget_class_bind_template_callback (widget_class, on_call_selected);
+  gtk_widget_class_bind_template_callback (widget_class, on_docall_clicked);
 }
 
 #define GAMEMODE_DBUS_NAME "com.feralinteractive.GameMode"
@@ -158,6 +179,11 @@ gmt_window_init (GmtWindow *self)
 
 
   gtk_label_set_text (self->lbl_flatpak, boxed ? "yes" : "no");
+
+  on_call_selected (self, self->cbx_call);
+
+  gtk_entry_set_text (self->txt_target, pidstr);
+  gtk_entry_set_text (self->txt_requester, pidstr);
 }
 
 static void
@@ -166,6 +192,12 @@ gmt_startstop_operation (GmtWindow *self, gboolean starting)
   gtk_widget_set_sensitive (GTK_WIDGET (self->sw_gamemode), !starting);
   gtk_widget_set_sensitive (GTK_WIDGET (self->sw_uselib), !starting);
   gtk_widget_set_sensitive (GTK_WIDGET (self->btn_refresh), !starting);
+
+  gtk_widget_set_sensitive (GTK_WIDGET (self->cbx_call), !starting);
+  gtk_widget_set_sensitive (GTK_WIDGET (self->txt_target), !starting);
+  gtk_widget_set_sensitive (GTK_WIDGET (self->txt_requester), !starting);
+  gtk_widget_set_sensitive (GTK_WIDGET (self->btn_call), !starting);
+
 }
 
 static gboolean
@@ -265,6 +297,44 @@ refresh_finish (GmtWindow *self, int r)
   gtk_label_set_text (self->lbl_status, text);
 
   gmt_startstop_operation (self, FALSE);
+}
+
+static const char *
+call_get_id (GmtWindow *self, gint *args)
+{
+  g_auto(GValue) val = G_VALUE_INIT;
+  GtkTreeModel *model;
+  GtkTreeIter iter;
+  gboolean ok;
+
+  model = gtk_combo_box_get_model (self->cbx_call);
+  ok = gtk_combo_box_get_active_iter (self->cbx_call, &iter);
+
+  if (!ok)
+    return NULL;
+
+  gtk_tree_model_get_value (model, &iter, 2, &val);
+
+  if (args)
+    *args = g_value_get_int (&val);
+
+  return gtk_combo_box_get_active_id (self->cbx_call);
+}
+
+static void
+on_call_selected (GmtWindow *self,
+                  GtkComboBox *box)
+{
+  const char *method;
+  gint args;
+
+  method = call_get_id (self, &args);
+
+  if (method == NULL)
+    return;
+
+  gtk_widget_set_sensitive (GTK_WIDGET (self->txt_requester), args > 1);
+  gtk_widget_set_visible (GTK_WIDGET (self->txt_requester), args > 1);
 }
 
 /* native gamemode implementation */
@@ -541,4 +611,83 @@ gmt_library_query_status (GmtWindow *self)
 
   task = g_task_new (self, NULL, on_status_thread_ready, self);
   g_task_run_in_thread (task, query_status_thread);
+}
+
+/* custom calls */
+static void
+on_docall_ready (GObject      *source,
+                 GAsyncResult *res,
+                 gpointer      user_data)
+{
+  g_autoptr(GError) err = NULL;
+  g_autofree char *txt = NULL;
+  GmtWindow *self = user_data;
+  int r = -1;
+
+  r = call_gamemode_finish (res, &err);
+  if (r < 0)
+    g_warning ("could not talk to gamemode: %s", err->message);
+
+  txt = g_strdup_printf ("%d", r);
+
+  gtk_label_set_text (self->lbl_result, txt);
+  gmt_startstop_operation (self, FALSE);
+}
+
+
+static void
+on_docall_clicked (GmtWindow *self,
+                   GtkButton *button)
+{
+  g_autoptr(GError) err = NULL;
+  GVariant *params;
+  const char *method;
+  const char *txt;
+  gboolean ok;
+  gint64 target = 0;
+  gint64 requester = 0;
+  gint args;
+
+  method = call_get_id (self, &args);
+
+  if (method == NULL)
+    return;
+
+  txt = gtk_entry_get_text (self->txt_target);
+  ok = g_ascii_string_to_signed (txt, 10, 1, G_MAXINT32, &target, &err);
+
+  if (!ok)
+    {
+      g_warning ("Failed to parse target pid: %s", err->message);
+      return;
+      }
+
+  if (args > 1)
+    {
+      txt = gtk_entry_get_text (self->txt_requester);
+      ok = g_ascii_string_to_signed (txt, 10, 1, G_MAXINT32, &requester, &err);
+
+      if (!ok)
+        {
+          g_warning ("Failed to parse requestor pid: %s", err->message);
+          return;
+        }
+
+      params = g_variant_new ("(ii)", (gint32) target, (gint32) requester);
+    }
+  else
+    {
+      params = g_variant_new ("(i)", (gint32) target);
+    }
+
+  g_debug ("do call: %s %i %i", method, (gint32) target, (gint32) requester);
+  gmt_startstop_operation (self, TRUE);
+
+  call_gamemode (self,
+                 method,
+                 params,
+                 self->portal,
+                 on_docall_ready,
+                 self);
+
 }
