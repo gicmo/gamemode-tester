@@ -30,6 +30,8 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 
+#include <math.h>
+#include <limits.h>
 
 struct _GmtWindow
 {
@@ -60,6 +62,10 @@ struct _GmtWindow
 
   /*  */
   GDBusProxy *gamemode;
+
+  /*  */
+  GtkSwitch    *sw_work;
+  GCancellable *work_cancel;
 };
 
 G_DEFINE_TYPE (GmtWindow, gmt_window, GTK_TYPE_APPLICATION_WINDOW)
@@ -103,6 +109,10 @@ static void     on_docall_clicked (GmtWindow *self,
 static void     on_call_selected  (GmtWindow *self,
                                    GtkComboBox *widget);
 
+static gboolean on_work_toggled (GmtWindow *self,
+                                 gboolean   enable,
+                                 GtkSwitch *toggle);
+
 int gmt_setup_socket (GmtWindow          *self,
                       struct sockaddr_un *sau,
                       socklen_t          *sl);
@@ -121,6 +131,7 @@ gmt_window_class_init (GmtWindowClass *klass)
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, lbl_flatpak);
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, lbl_status);
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, btn_refresh);
+  gtk_widget_class_bind_template_child (widget_class, GmtWindow, sw_work);
 
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, cbx_call);
   gtk_widget_class_bind_template_child (widget_class, GmtWindow, txt_target);
@@ -132,6 +143,7 @@ gmt_window_class_init (GmtWindowClass *klass)
   gtk_widget_class_bind_template_callback (widget_class, on_refresh_clicked);
   gtk_widget_class_bind_template_callback (widget_class, on_call_selected);
   gtk_widget_class_bind_template_callback (widget_class, on_docall_clicked);
+  gtk_widget_class_bind_template_callback (widget_class, on_work_toggled);
 }
 
 #define GAMEMODE_DBUS_NAME "com.feralinteractive.GameMode"
@@ -184,6 +196,8 @@ gmt_window_init (GmtWindow *self)
 
   gtk_entry_set_text (self->txt_target, pidstr);
   gtk_entry_set_text (self->txt_requester, pidstr);
+
+  self->work_cancel = g_cancellable_new ();
 }
 
 static void
@@ -691,3 +705,78 @@ on_docall_clicked (GmtWindow *self,
                  self);
 
 }
+
+/*  */
+
+
+static gboolean is_prime(long long unsigned int num, GCancellable *c) {
+  /* no sqrt(num) optimization, because we
+   * want the extra work */
+  for (int i = 2; i < num && !g_cancellable_is_cancelled (c); i++)
+    if (num % i == 0)
+      return FALSE;
+
+  return TRUE;
+}
+
+static void
+calc_primes (GTask *task,
+             gpointer source_object,
+             gpointer task_data,
+             GCancellable *cancellable)
+{
+  while (!g_cancellable_is_cancelled (cancellable))
+    {
+
+      for (long long unsigned int i = 2; i < ULLONG_MAX; i++)
+        {
+          gboolean isp;
+
+          isp = is_prime (i, cancellable);
+          if (isp)
+            g_print("Found %llu to be prime\n", i);
+
+          if (g_cancellable_is_cancelled (cancellable))
+            break;
+          }
+      }
+
+  g_task_return_boolean (task, TRUE);
+}
+
+static void
+work_stopped (GObject *source_object,
+              GAsyncResult *res,
+              gpointer user_data)
+{
+  GTask *task = G_TASK (res);
+  GmtWindow *self = g_task_get_source_object (task);
+
+  gtk_widget_set_sensitive (GTK_WIDGET (self->sw_work), TRUE);
+  g_cancellable_reset (self->work_cancel);
+  gtk_switch_set_state (self->sw_work, FALSE);
+}
+
+static gboolean
+on_work_toggled (GmtWindow *self,
+                 gboolean   enable,
+                 GtkSwitch *toggle)
+{
+  if (enable)
+    {
+      g_autoptr(GTask) task = NULL;
+
+      task = g_task_new (self, self->work_cancel, work_stopped, NULL);
+      g_task_run_in_thread (task, calc_primes);
+      gtk_switch_set_state (self->sw_work, TRUE);
+    }
+  else
+    {
+      gtk_widget_set_sensitive (GTK_WIDGET (toggle), FALSE);
+      g_cancellable_cancel (self->work_cancel);
+    }
+
+  return TRUE;
+}
+
+
