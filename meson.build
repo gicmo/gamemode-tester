@@ -14,12 +14,11 @@ cc = meson.get_compiler('c')
 i18n = import('i18n')
 gnome = import('gnome')
 
-dl   = cc.find_library('dl', required: true)
 dbus = dependency('dbus-1')
 gio  = dependency('gio-2.0', version: '>= 2.50')
 unix = dependency('gio-unix-2.0', version: '>= 2.50')
 gtk3 = dependency('gtk+-3.0', version: '>= 3.22')
-gmld = dependency('gamemode-libdbus', version: '>= 0.1')
+gm   = dependency('gamemode', version: '>= 1.4')
 
 prefixdir = get_option('prefix')
 localedir = join_paths(prefixdir, get_option('localedir'))
@@ -57,7 +56,7 @@ app_sources += gnome.compile_resources(
 )
 
 executable('gamemode-tester', app_sources,
-  dependencies: [dl, gio, unix, gtk3, gmld],
+  dependencies: [gio, unix, gtk3, gm],
   install: true,
 )
 
